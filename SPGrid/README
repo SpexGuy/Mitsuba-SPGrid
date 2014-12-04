@@ -1,0 +1,32 @@
+This is a brief window into the SPGrid software library. SPGrid
+provides a novel data structure that allows manipulation of data on
+sparse subsets of uniform grids. This standalone version of SPGrid
+contains a few performance and memory allocation tests, just to give
+an idea of the capabilities of SPGrid.
+
+To compile, run "make" from a Unix Terminal in this directory. This
+generates the "sgprid_demo" executable. To run, simply type:
+
+$ ./spgrid_demo <size> <num_threads>
+
+Where size should be an integer and a power of 2 and num_threads
+dictates the number of threads that this program will use. This will
+generate an SPGrid data stucture and activate a narrow band of cells,
+as well as run a Laplacian stencil on the active cells.
+
+There are also several flags in "main.cpp" which can be turned on to
+show various other performance figures:
+
+LOOP_AT_END is simply a flag that will more or less pause the program
+with the data structure still intact, such that the user can view the
+memory usage using a tool such as "top" (i.e. run "top" from another
+terminal).
+
+BLOCKED_COPY runs a SAXPY routine on SPGrid data channels. To observe
+performance of these routines, insert timing instructions before
+either the Laplace or SAXPY kernel.
+
+DENSE_CUBE will activate the entire grid domain rather than a narrow
+band.
+
+
