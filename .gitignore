@@ -18,6 +18,8 @@ debian
 config.py
 config.log
 *.pyc
+*.o
+spgrid_demo
 
 # MSVC++-related
 build/mitsuba-msvc2010.sdf

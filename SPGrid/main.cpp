@@ -12,6 +12,8 @@
 #include "SPGrid_Set.h"
 #include "Blocked_Copy_Helper.h"
 #include "Laplace_Helper.h"
+#include "Save_Helper.h"
+#include "Load_Helper.h"
 #include "std_array.h"
 
 #include "PTHREAD_QUEUE.h"
@@ -22,8 +24,10 @@
 #include "HIERARCHICAL_RASTERIZER.h"
 
 //#define LOOP_AT_END
-//#define BLOCKED_COPY
+#define BLOCKED_COPY
 //#define DENSE_CUBE
+#define LOAD_FLAGS
+#define SAVE_GRID
 
 extern PTHREAD_QUEUE* pthread_queue;
 using namespace SPGrid;
@@ -87,12 +91,24 @@ int main(int argc,char* argv[]) {
         std::cout << "This is a sparse configuration, crank that size up!\n";
     }
     std::cout << "Flagging active cells (on narrow band)...";
+#ifdef LOAD_FLAGS
+    Load_Helper<Foo, 3> loader(allocator);
+    if (!loader.Load_Mask(flag_set, "blocks.spmask")) {
+        printf("Failed to load blocks.spmask");
+        exit(1);
+    }
+    if (!loader.Load_Data(&Foo::flags, flag_set, "flags.spdata")) {
+        printf("Failed to load flags.spdata");
+        exit(1);
+    }
+    printf("Loaded flags from flags.spdata\n");
+#else
     GEOMETRY_BLOCK block(imin,imax,Xmin,Xmax);
     ADAPTIVE_SPHERE_RASTERIZER<Flags_set_type> adaptive_sphere(flag_set,center,inner_radius,outer_radius);
     HIERARCHICAL_RASTERIZER<ADAPTIVE_SPHERE_RASTERIZER<Flags_set_type> > rasterizer(adaptive_sphere);
     rasterizer.Iterate(block);
     active_cells = adaptive_sphere.total_active;
-    // Narrow band init
+#endif
 #endif
     std::cout << "done.\n";
     uint64_t bigsize = size;
@@ -129,6 +145,16 @@ int main(int argc,char* argv[]) {
         2./3.);
     helper.Run_Parallel(n_threads);
     printf("Finished running Laplace kernel.\n");
+#endif
+
+#ifdef SAVE_GRID
+    Save_Helper<Foo_Allocator, 3, Flags_set_type> saver(
+        allocator,
+        flag_set);
+    saver.Save_Mask("blocks.spmask");
+    saver.Save_Data(d3, "density.spdata");
+    saver.Save_Data(flags, "flags.spdata");
+    printf("Finished saving.\n");
 #endif
        
 #ifdef LOOP_AT_END
