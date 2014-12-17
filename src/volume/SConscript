@@ -4,5 +4,7 @@ plugins += env.SharedLibrary('constvolume', ['constvolume.cpp'])
 plugins += env.SharedLibrary('gridvolume', ['gridvolume.cpp'])
 plugins += env.SharedLibrary('hgridvolume', ['hgridvolume.cpp'])
 plugins += env.SharedLibrary('volcache', ['volcache.cpp'])
+plugins += env.SharedLibrary('spgridvolume', ['spgridvolume.cpp','spgrid/SPGrid_Utilities.cpp','spgrid/Blocked_Copy_Helper.cpp','spgrid/PTHREAD_QUEUE.cpp'])
+
 
 Export('plugins')
