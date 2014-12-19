@@ -316,70 +316,34 @@ public:
     Point nix, niy, niz, xix, xiy, xiz;
     Float lookupFloat(const Point &_p) const {
 		const Point p = m_worldToGrid.transformAffine(_p);
-
-		//This is just the basic implementation - grab nearest neighbor?
-		int x,y,z;
-		x = math::floorToInt(p.x);
-		y = math::floorToInt(p.y);
-		z = math::floorToInt(p.z);
-        std_array<int,3> coord(x, y, z);
-        if (flag_set.Is_Set(coord, 0xFFFFFFFFU)) {
-		    return d1(coord);
-        }
-        return 0.0f;
-
-		//The following stuff does some nice interpolation but we can look at that later
-		/*
 		const int x1 = math::floorToInt(p.x),
-			  y1 = math::floorToInt(p.y),
-			  z1 = math::floorToInt(p.z),
-			  x2 = x1+1, y2 = y1+1, z2 = z1+1;
+		          y1 = math::floorToInt(p.y),
+		          z1 = math::floorToInt(p.z),
+                  x2 = x1 + 1,
+                  y2 = y1 + 1,
+                  z2 = z1 + 1;
 
-		if (x1 < 0 || y1 < 0 || z1 < 0 || x2 >= m_res.x ||
-		    y2 >= m_res.y || z2 >= m_res.z)
+		if (x1 < 0        || y1 < 0        || z1 < 0 ||
+            x2 >= m_res.x || y2 >= m_res.y || z2 >= m_res.z)
 			return 0;
 
-		const Float fx = p.x - x1, fy = p.y - y1, fz = p.z - z1,
-				_fx = 1.0f - fx, _fy = 1.0f - fy, _fz = 1.0f - fz;
+        float d[8];
+        getGridValue(d1, flag_set, x1, y1, z1, d[0]);
+        getGridValue(d1, flag_set, x2, y1, z1, d[1]);
+        getGridValue(d1, flag_set, x1, y2, z1, d[2]);
+        getGridValue(d1, flag_set, x2, y2, z1, d[3]);
+        getGridValue(d1, flag_set, x1, y1, z2, d[4]);
+        getGridValue(d1, flag_set, x2, y1, z2, d[5]);
+        getGridValue(d1, flag_set, x1, y2, z2, d[6]);
+        getGridValue(d1, flag_set, x2, y2, z2, d[7]);
 
-		switch (m_volumeType) {
-			case EFloat32: {
-				const float *floatData = (float *) m_data;
-				const Float
-					d000 = floatData[(z1*m_res.y + y1)*m_res.x + x1],
-					d001 = floatData[(z1*m_res.y + y1)*m_res.x + x2],
-					d010 = floatData[(z1*m_res.y + y2)*m_res.x + x1],
-					d011 = floatData[(z1*m_res.y + y2)*m_res.x + x2],
-					d100 = floatData[(z2*m_res.y + y1)*m_res.x + x1],
-					d101 = floatData[(z2*m_res.y + y1)*m_res.x + x2],
-					d110 = floatData[(z2*m_res.y + y2)*m_res.x + x1],
-					d111 = floatData[(z2*m_res.y + y2)*m_res.x + x2];
+        const Float fx =  p.x - x1,  fy =  p.y - y1,  fz =  p.z - z1,
+                   _fx = 1.0f - fx, _fy = 1.0f - fy, _fz = 1.0f - fz;
 
-				return ((d000*_fx + d001*fx)*_fy +
-						(d010*_fx + d011*fx)*fy)*_fz +
-					   ((d100*_fx + d101*fx)*_fy +
-						(d110*_fx + d111*fx)*fy)*fz;
-			}
-			case EUInt8: {
-				const Float
-					d000 = m_densityMap[m_data[(z1*m_res.y + y1)*m_res.x + x1]],
-					d001 = m_densityMap[m_data[(z1*m_res.y + y1)*m_res.x + x2]],
-					d010 = m_densityMap[m_data[(z1*m_res.y + y2)*m_res.x + x1]],
-					d011 = m_densityMap[m_data[(z1*m_res.y + y2)*m_res.x + x2]],
-					d100 = m_densityMap[m_data[(z2*m_res.y + y1)*m_res.x + x1]],
-					d101 = m_densityMap[m_data[(z2*m_res.y + y1)*m_res.x + x2]],
-					d110 = m_densityMap[m_data[(z2*m_res.y + y2)*m_res.x + x1]],
-					d111 = m_densityMap[m_data[(z2*m_res.y + y2)*m_res.x + x2]];
-
-				return ((d000*_fx + d001*fx)*_fy +
-						(d010*_fx + d011*fx)*fy)*_fz +
-					   ((d100*_fx + d101*fx)*_fy +
-						(d110*_fx + d111*fx)*fy)*fz;
-			}
-			default:
-				return 0.0f;
-		}
-		*/
+        return ((d[0]*_fx + d[1]*fx)*_fy +
+                (d[2]*_fx + d[3]*fx)*fy)*_fz +
+               ((d[4]*_fx + d[5]*fx)*_fy +
+                (d[6]*_fx + d[7]*fx)*fy)*fz;
 	}
 
     //TODO: are we supporting this? probably just force return Spectrum(0.0f) for now...
@@ -608,6 +572,15 @@ public:
 
 	MTS_DECLARE_CLASS()
 protected:
+    FINLINE bool getGridValue(const Data_array_type &channel, const Flags_set_type &set, int x, int y, int z, float &val) const {
+        std_array<int,3> coord(x, y, z);
+        if (set.Is_Set(coord, 0xFFFFFFFFU)) {
+		    val = channel(coord);
+            return true;
+        }
+        val = 0.0f;
+        return false;
+    }
     /*
 	FINLINE Vector lookupQuantizedDirection(size_t index) const {
 		uint8_t theta = m_data[2*index], phi = m_data[2*index+1];
