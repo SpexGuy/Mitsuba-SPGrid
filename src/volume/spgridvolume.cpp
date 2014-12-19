@@ -16,6 +16,9 @@
     along with this program. If not, see <http://www.gnu.org/licenses/>.
 */
 
+//TODO: remove this line (forces debug compilation)
+#undef MTS_NDEBUG
+
 #include <mitsuba/render/volume.h>
 #include <mitsuba/core/mstream.h>
 #include <mitsuba/core/fresolver.h>
@@ -31,7 +34,7 @@
 //#define VINTERP_LOOKUP_SPECTRUM
 
 // Number of power iteration steps used to find the dominant direction
-#define POWER_ITERATION_STEPS 5
+//#define POWER_ITERATION_STEPS 5
 
 using namespace SPGrid;
 
@@ -128,29 +131,98 @@ public:
         Data_array_type d2;
         Flags_array_type flags;
         Flags_set_type flag_set;
+        unsigned entry_size;
 
-        SPGrid(Foo_Allocator &&alloc_in)
+        SPGrid(Foo_Allocator &&alloc_in, unsigned entry_size_in)
             : alloc(std::move(alloc_in)),
               d0(alloc.Get_Array(&Foo::x)),
               d1(alloc.Get_Array(&Foo::y)),
               d2(alloc.Get_Array(&Foo::z)),
               flags(alloc.Get_Array(&Foo::flags)),
               flag_set(flags)
-        {}
+        {
+            entry_size = entry_size_in;
+        }
     };
 
 	SPGridDataSource(const Properties &props)
         : VolumeDataSource(props)
     {
-        printf("Loading Allocator\n");
-        m_grid = new SPGrid(std::move(Loader::Load_Allocator(props.getString("blockfile"))));
-        printf("Loading Mask\n");
-		Loader::Load_Mask(m_grid->alloc, m_grid->flag_set, props.getString("blockfile"));
-        printf("Loading Flags\n");
-        Loader::Load_Data(m_grid->alloc, &Foo::flags, m_grid->flag_set, props.getString("flagfile"));
-        printf("Loading Densities\n");
-        Loader::Load_Data(m_grid->alloc, &Foo::x, m_grid->flag_set, props.getString("densityfile"));
-		
+        bool error = false;
+        
+        std::vector<std::string> blockfiles;
+        std::vector<std::string> flagfiles;
+        std::vector<std::string> channel0files;
+        std::vector<std::string> channel1files;
+        std::vector<std::string> channel2files;
+
+        std::string blocks = props.getString("blockfile");
+        std::string flags = props.getString("flagfile");
+        std::string channel0 = props.getString("channel0file");
+
+        parseFileList(blockfiles, "blockfile", blocks);
+        parseFileList(flagfiles, "flagfile", flags);
+        parseFileList(channel0files, "channel0file", channel0);
+
+        m_numChannels = 1;
+        if (props.hasProperty("channel1file") && props.hasProperty("channel2file")) {
+            m_numChannels = 3;
+            std::string channel1 = props.getString("channel1file");
+            std::string channel2 = props.getString("channel2file");
+            parseFileList(channel1files, "channel1file", channel1);
+            parseFileList(channel2files, "channel2file", channel2);
+        } else if (props.hasProperty("channel1file")) {
+            Log(EError, "channel1file specified but not channel2file!");
+            error = true;
+        } else if (props.hasProperty("channel2file")) {
+            Log(EError, "channel2file specified but not channel1file!");
+            error = true;
+        }
+
+        m_nGrids = blockfiles.size();
+        if (m_nGrids == 0) {
+            Log(EError, "No grids specified! Use the blockfile, flagfile, and channel0file attributes.");
+            error = true;
+        } else {
+            if (flagfiles.size() != m_nGrids) {
+                Log(EError, "Wrong number of flagfiles! (%d blockfiles, %d flagfiles)", m_nGrids, flagfiles.size());
+                error = true;
+            }
+            if (channel0files.size() != m_nGrids) {
+                Log(EError, "Wrong number of channel0files! (%d blockfiles, %d channel0files)", m_nGrids, channel0files.size());
+                error = true;
+            }
+            if (m_numChannels == 3) {
+                if (channel1files.size() != m_nGrids) {
+                    Log(EError, "Wrong number of channel1files! (%d blockfiles, %d channel1files)", m_nGrids, channel1files.size());
+                    error = true;
+                }
+                if (channel2files.size() != m_nGrids) {
+                    Log(EError, "Wrong number of channel2files! (%d blockfiles, %d channel2files)", m_nGrids, channel2files.size());
+                    error = true;
+                }
+            }
+        }
+
+        if (error) {
+            Log(EError, "At least one thing went wrong loading the SPGrid. Setting number of grids to 0.");
+            m_nGrids = 0;
+        }
+
+        if (m_nGrids) {
+            m_grids = new SPGrid*[m_nGrids];
+            for (int c = 0; c < m_nGrids; c++) {
+                m_grids[c] = new SPGrid(std::move(Loader::Load_Allocator(blockfiles[c])), c);
+                Loader::Load_Mask(m_grids[c]->alloc, m_grids[c]->flag_set, blockfiles[c]);
+                Loader::Load_Data(m_grids[c]->alloc, &Foo::flags, m_grids[c]->flag_set, flagfiles[c]);
+                Loader::Load_Data(m_grids[c]->alloc, &Foo::x, m_grids[c]->flag_set, channel0files[c]);
+                if (m_numChannels == 3) {
+                    Loader::Load_Data(m_grids[c]->alloc, &Foo::y, m_grids[c]->flag_set, channel1files[c]);
+                    Loader::Load_Data(m_grids[c]->alloc, &Foo::z, m_grids[c]->flag_set, channel2files[c]);
+                }
+            }
+        }
+
         m_volumeToWorld = props.getTransform("toWorld", Transform());
 
         if (props.hasProperty("min") && props.hasProperty("max")) {
@@ -159,14 +231,24 @@ public:
 			m_dataAABB.min = props.getPoint("min");
 			m_dataAABB.max = props.getPoint("max");
 		} else {
-            //std_array<unsigned, 3> size = alloc.Size();
             //TODO: don't hardcode these
             m_dataAABB.min = Point(-0.5, -0.5, -0.195312);
             m_dataAABB.max = Point( 0.5,  0.5,  0.195312);
         }
-        m_res[0] = m_grid->alloc.xsize;
-        m_res[1] = m_grid->alloc.ysize;
-        m_res[2] = m_grid->alloc.zsize;
+
+        if (m_nGrids) {
+            m_res[0] = m_grids[0]->alloc.xsize;
+            m_res[1] = m_grids[0]->alloc.ysize;
+            m_res[2] = m_grids[0]->alloc.zsize;
+        } else {
+            m_res[0] = 1;
+            m_res[1] = 1;
+            m_res[2] = 1;
+        }
+
+        printf("Loaded %d SPGrids\n", m_nGrids);
+        
+        //TODO: validate grid sizes
 
 		/**
 		 * When 'sendData' is set to false, only the filename
@@ -204,7 +286,9 @@ public:
 	}
 
 	virtual ~SPGridDataSource() {
-        delete m_grid;
+        for (int c = 0; c < m_nGrids; c++)
+            delete m_grids[c];
+        delete [] m_grids;
 	}
 
 /*
@@ -319,27 +403,30 @@ public:
     Float lookupFloat(const Point &_p) const {
 		const Point p = m_worldToGrid.transformAffine(_p);
 
-		const int x1 = math::floorToInt(p.x),
-		          y1 = math::floorToInt(p.y),
-		          z1 = math::floorToInt(p.z);
+		int x1 = math::floorToInt(p.x),
+            y1 = math::floorToInt(p.y),
+            z1 = math::floorToInt(p.z);
+		
+        if (x1 < 0 || y1 < 0 || z1 < 0)
+            return 0;
 #ifdef VINTERP_LOOKUP_FLOAT
-        const int x2 = x1 + 1,
-                  y2 = y1 + 1,
-                  z2 = z1 + 1;
+        float d[8];
+        
+        const unsigned resolution = getInitialGridValue(x1, y1, z1, d[0]);
+        const int x2 = x1 + resolution,
+                  y2 = y1 + resolution,
+                  z2 = z1 + resolution;
 
-		if (x1 < 0        || y1 < 0        || z1 < 0 ||
-            x2 >= m_res.x || y2 >= m_res.y || z2 >= m_res.z)
+        if (x2 >= m_res.x || y2 >= m_res.y || z2 >= m_res.z)
 			return 0;
 
-        float d[8];
-        getGridValue(m_grid->d0, m_grid->flag_set, x1, y1, z1, d[0]);
-        getGridValue(m_grid->d0, m_grid->flag_set, x2, y1, z1, d[1]);
-        getGridValue(m_grid->d0, m_grid->flag_set, x1, y2, z1, d[2]);
-        getGridValue(m_grid->d0, m_grid->flag_set, x2, y2, z1, d[3]);
-        getGridValue(m_grid->d0, m_grid->flag_set, x1, y1, z2, d[4]);
-        getGridValue(m_grid->d0, m_grid->flag_set, x2, y1, z2, d[5]);
-        getGridValue(m_grid->d0, m_grid->flag_set, x1, y2, z2, d[6]);
-        getGridValue(m_grid->d0, m_grid->flag_set, x2, y2, z2, d[7]);
+        getGridValue(x2, y1, z1, d[1]);
+        getGridValue(x1, y2, z1, d[2]);
+        getGridValue(x2, y2, z1, d[3]);
+        getGridValue(x1, y1, z2, d[4]);
+        getGridValue(x2, y1, z2, d[5]);
+        getGridValue(x1, y2, z2, d[6]);
+        getGridValue(x2, y2, z2, d[7]);
 
         const Float fx =  p.x - x1,  fy =  p.y - y1,  fz =  p.z - z1,
                    _fx = 1.0f - fx, _fy = 1.0f - fy, _fz = 1.0f - fz;
@@ -350,7 +437,7 @@ public:
                 (d[6]*_fx + d[7]*fx)*fy)*fz;
 #else
         float value;
-        getGridValue(m_grid->d0, m_grid->flag_set, x1, y1, z1, value);
+        getGridValue(x1, y1, z1, value);
         return value;
 #endif
 	}
@@ -510,7 +597,7 @@ public:
 	}
 
     //TODO: adjust these to show what we actually support i.e. true/false/false if we don't implement Spectrum/Vector stuff
-	bool supportsFloatLookups() const {return true;}
+	bool supportsFloatLookups() const { return true; }
 	bool supportsSpectrumLookups() const { return false; }
 	bool supportsVectorLookups() const { return false; }
 	/*	
@@ -535,15 +622,67 @@ public:
 
 	MTS_DECLARE_CLASS()
 protected:
-    FINLINE bool getGridValue(const Data_array_type &channel, const Flags_set_type &set, int x, int y, int z, float &val) const {
-        std_array<int,3> coord(x, y, z);
-        if (set.Is_Set(coord, 0xFFFFFFFFU)) {
-		    val = channel(coord);
-            return true;
+    // trim from start
+    static inline std::string &ltrim(std::string &s) {
+            s.erase(s.begin(), std::find_if(s.begin(), s.end(), std::not1(std::ptr_fun<int, int>(std::isspace))));
+            return s;
+    }
+
+    // trim from end
+    static inline std::string &rtrim(std::string &s) {
+            s.erase(std::find_if(s.rbegin(), s.rend(), std::not1(std::ptr_fun<int, int>(std::isspace))).base(), s.end());
+            return s;
+    }
+
+    // trim from both ends
+    static inline std::string &trim(std::string &s) {
+            return ltrim(rtrim(s));
+    }
+
+    FINLINE void parseFileList(std::vector<std::string> &files, const std::string &name, const std::string &str) {
+        std::stringstream ss(str);
+        std::string item;
+        while (std::getline(ss, item, ',')) {
+            item = trim(item);
+            if (item.empty())
+                Log(EWarn, "Item %s contains a blank file at index %d.", name.c_str(), files.size());
+            else
+                files.push_back(item);
+        }
+    }
+
+    //TODO: optimize based on number of trailing zeros
+    FINLINE unsigned getInitialGridValue(int &x, int &y, int &z, float &val) const {
+        const int sx = x, sy = y, sz = z;
+        for (int c = 0; c < m_nGrids; c++) {
+            std_array<int,3> coord(x, y, z);
+            if (m_grids[c]->flag_set.Is_Set(coord, 0xFFFFFFFFU)) {
+                val = m_grids[c]->d0(coord);
+                return 1 << c;
+            }
+            x = x >> 1;
+            y = y >> 1;
+            z = z >> 1;
+        }
+        // go back to max resolution
+        x = sx;
+        y = sy;
+        z = sz;
+        val = 0.0f;
+        return 1;
+    }
+
+    FINLINE void getGridValue(int x, int y, int z, float &val) const {
+        for (int c = 0; c < m_nGrids; c++) {
+            std_array<int,3> coord(x, y, z);
+            if (m_grids[c]->flag_set.Is_Set(coord, 0xFFFFFFFFU)) {
+                val = m_grids[c]->d0(coord);
+                return;
+            }
         }
         val = 0.0f;
-        return false;
     }
+
     /*
 	FINLINE Vector lookupQuantizedDirection(size_t index) const {
 		uint8_t theta = m_data[2*index], phi = m_data[2*index+1];
@@ -556,7 +695,9 @@ protected:
     */
 
 protected:
-    SPGrid *m_grid;
+    SPGrid **m_grids;
+    unsigned m_nGrids;
+    unsigned m_numChannels;
 	bool m_sendData;
 	Vector3i m_res;
 	Transform m_worldToGrid;
