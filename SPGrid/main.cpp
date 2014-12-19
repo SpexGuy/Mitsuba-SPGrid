@@ -26,9 +26,9 @@
 //#define LOOP_AT_END
 #define BLOCKED_COPY
 #define DENSE_CUBE
-//#define LOAD_FLAGS
-#define LOAD_SMOKE
-#define SAVE_GRID
+#define LOAD_FLAGS
+//#define LOAD_SMOKE
+//#define SAVE_GRID
 
 extern PTHREAD_QUEUE* pthread_queue;
 using namespace SPGrid;

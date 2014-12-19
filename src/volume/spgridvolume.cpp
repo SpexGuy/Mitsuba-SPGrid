@@ -27,6 +27,8 @@
 
 // Uncomment to enable nearest-neighbor direction interpolation
 //#define VINTERP_NEAREST_NEIGHBOR
+//#define VINTERP_LOOKUP_FLOAT
+//#define VINTERP_LOOKUP_SPECTRUM
 
 // Number of power iteration steps used to find the dominant direction
 #define POWER_ITERATION_STEPS 5
@@ -118,28 +120,53 @@ public:
     typedef std_array<int,3> Vec3i;
     typedef std_array<float,3> Vec3f;
 
+    struct SPGrid {
+    public:
+        Foo_Allocator alloc;
+        Data_array_type d0;
+        Data_array_type d1;
+        Data_array_type d2;
+        Flags_array_type flags;
+        Flags_set_type flag_set;
+
+        SPGrid(Foo_Allocator &&alloc_in)
+            : alloc(std::move(alloc_in)),
+              d0(alloc.Get_Array(&Foo::x)),
+              d1(alloc.Get_Array(&Foo::y)),
+              d2(alloc.Get_Array(&Foo::z)),
+              flags(alloc.Get_Array(&Foo::flags)),
+              flag_set(flags)
+        {}
+    };
+
 	SPGridDataSource(const Properties &props)
-		: VolumeDataSource(props),
-          alloc(Loader::Load_Allocator(props.getString("blockfile"))),
-          d1(alloc.Get_Array(&Foo::x)),
-          flags(alloc.Get_Array(&Foo::flags)),
-          flag_set(flags)
+        : VolumeDataSource(props)
     {
-		m_volumeToWorld = props.getTransform("toWorld", Transform());
-		if (props.hasProperty("min") && props.hasProperty("max")) {
+        printf("Loading Allocator\n");
+        m_grid = new SPGrid(std::move(Loader::Load_Allocator(props.getString("blockfile"))));
+        printf("Loading Mask\n");
+		Loader::Load_Mask(m_grid->alloc, m_grid->flag_set, props.getString("blockfile"));
+        printf("Loading Flags\n");
+        Loader::Load_Data(m_grid->alloc, &Foo::flags, m_grid->flag_set, props.getString("flagfile"));
+        printf("Loading Densities\n");
+        Loader::Load_Data(m_grid->alloc, &Foo::x, m_grid->flag_set, props.getString("densityfile"));
+		
+        m_volumeToWorld = props.getTransform("toWorld", Transform());
+
+        if (props.hasProperty("min") && props.hasProperty("max")) {
 			/* Optionally allow to use an AABB other than
 			   the one specified by the grid file */
 			m_dataAABB.min = props.getPoint("min");
 			m_dataAABB.max = props.getPoint("max");
 		} else {
-            std_array<unsigned, 3> size = alloc.Size();
+            //std_array<unsigned, 3> size = alloc.Size();
             //TODO: don't hardcode these
             m_dataAABB.min = Point(-0.5, -0.5, -0.195312);
             m_dataAABB.max = Point( 0.5,  0.5,  0.195312);
         }
-        m_res[0] = alloc.xsize;
-        m_res[1] = alloc.ysize;
-        m_res[2] = alloc.zsize;
+        m_res[0] = m_grid->alloc.xsize;
+        m_res[1] = m_grid->alloc.ysize;
+        m_res[2] = m_grid->alloc.zsize;
 
 		/**
 		 * When 'sendData' is set to false, only the filename
@@ -149,19 +176,12 @@ public:
 		 * occurs on a remote machine).
 		 */
         m_sendData = props.getBoolean("sendData", false);
-
-		Loader::Load_Mask(alloc, flag_set, props.getString("blockfile"));
-        Loader::Load_Data(alloc, &Foo::flags, flag_set, props.getString("flagfile")); //now it's some type issue?
-        Loader::Load_Data(alloc, &Foo::x, flag_set, props.getString("densityfile"));
+        
     }
 
     //TODO: probably won't support this? or at least force local load?
 	SPGridDataSource(Stream *stream, InstanceManager *manager)
-			: VolumeDataSource(stream, manager),
-              alloc(Loader::Load_Allocator("GIANT FAILURE!")),
-              d1(alloc.Get_Array(&Foo::x)),
-              flags(alloc.Get_Array(&Foo::flags)),
-              flag_set(flags)
+        : VolumeDataSource(stream, manager)
     {
         /*
 		m_volumeToWorld = Transform(stream);
@@ -184,22 +204,14 @@ public:
 	}
 
 	virtual ~SPGridDataSource() {
-        printf("\nSummary:\n  min: (%4d, %4d, %4d)\n  max: (%4d, %4d, %4d)\n",
-            minX, minY, minZ,
-            maxX, maxY, maxZ);
-        printf(" Caused By:\n");
-        printf("  (%f, %f, %f)\n", nix.x, nix.y, nix.z);
-        printf("  (%f, %f, %f)\n", niy.x, niy.y, niy.z);
-        printf("  (%f, %f, %f)\n", niz.x, niz.y, niz.z);
-        printf("  (%f, %f, %f)\n", xix.x, xix.y, xix.z);
-        printf("  (%f, %f, %f)\n", xiy.x, xiy.y, xiy.z);
-        printf("  (%f, %f, %f)\n", xiz.x, xiz.y, xiz.z);
+        delete m_grid;
 	}
 
+/*
 	size_t getVolumeSize() const {
         return size_t(alloc.Padded_Volume());
 	}
-    
+*/
     //TODO: we probably won't support this??? idk
 	void serialize(Stream *stream, InstanceManager *manager) const {
 		VolumeDataSource::serialize(stream, manager);
@@ -225,7 +237,6 @@ public:
         //TODO
     }
 
-    //TODO: fix me for SPGrid
 	void configure() {
 		Vector extents(m_dataAABB.getExtents());
 		m_worldToVolume = m_volumeToWorld.inverse();
@@ -255,9 +266,6 @@ public:
 		m_cosTheta[255] = m_sinTheta[255] = 0;
 		m_densityMap[255] = 1.0f;
         */
-
-        minX = minY = minZ = 0x7FFFFFFF;
-        maxX = maxY = maxZ = 0x80000000;
 	}
 
 	/**
@@ -308,18 +316,14 @@ public:
 		}
 	};
 
-    //TODO: replace me with SPGrid accessing stuff!
-    //      it looks like d000-d111 are the grid at the point and the 8 surrounding grids?
-    //      need to determine dxxx map to which directions
-    //      or just grab the closest thing and call it good? idk
-	int minX, minY, minZ, maxX, maxY, maxZ;
-    Point nix, niy, niz, xix, xiy, xiz;
     Float lookupFloat(const Point &_p) const {
 		const Point p = m_worldToGrid.transformAffine(_p);
+
 		const int x1 = math::floorToInt(p.x),
 		          y1 = math::floorToInt(p.y),
-		          z1 = math::floorToInt(p.z),
-                  x2 = x1 + 1,
+		          z1 = math::floorToInt(p.z);
+#ifdef VINTERP_LOOKUP_FLOAT
+        const int x2 = x1 + 1,
                   y2 = y1 + 1,
                   z2 = z1 + 1;
 
@@ -328,14 +332,14 @@ public:
 			return 0;
 
         float d[8];
-        getGridValue(d1, flag_set, x1, y1, z1, d[0]);
-        getGridValue(d1, flag_set, x2, y1, z1, d[1]);
-        getGridValue(d1, flag_set, x1, y2, z1, d[2]);
-        getGridValue(d1, flag_set, x2, y2, z1, d[3]);
-        getGridValue(d1, flag_set, x1, y1, z2, d[4]);
-        getGridValue(d1, flag_set, x2, y1, z2, d[5]);
-        getGridValue(d1, flag_set, x1, y2, z2, d[6]);
-        getGridValue(d1, flag_set, x2, y2, z2, d[7]);
+        getGridValue(m_grid->d0, m_grid->flag_set, x1, y1, z1, d[0]);
+        getGridValue(m_grid->d0, m_grid->flag_set, x2, y1, z1, d[1]);
+        getGridValue(m_grid->d0, m_grid->flag_set, x1, y2, z1, d[2]);
+        getGridValue(m_grid->d0, m_grid->flag_set, x2, y2, z1, d[3]);
+        getGridValue(m_grid->d0, m_grid->flag_set, x1, y1, z2, d[4]);
+        getGridValue(m_grid->d0, m_grid->flag_set, x2, y1, z2, d[5]);
+        getGridValue(m_grid->d0, m_grid->flag_set, x1, y2, z2, d[6]);
+        getGridValue(m_grid->d0, m_grid->flag_set, x2, y2, z2, d[7]);
 
         const Float fx =  p.x - x1,  fy =  p.y - y1,  fz =  p.z - z1,
                    _fx = 1.0f - fx, _fy = 1.0f - fy, _fz = 1.0f - fz;
@@ -344,6 +348,11 @@ public:
                 (d[2]*_fx + d[3]*fx)*fy)*_fz +
                ((d[4]*_fx + d[5]*fx)*_fy +
                 (d[6]*_fx + d[7]*fx)*fy)*fz;
+#else
+        float value;
+        getGridValue(m_grid->d0, m_grid->flag_set, x1, y1, z1, value);
+        return value;
+#endif
 	}
 
     //TODO: are we supporting this? probably just force return Spectrum(0.0f) for now...
@@ -363,67 +372,21 @@ public:
 		const Float fx = p.x - x1, fy = p.y - y1, fz = p.z - z1,
 				_fx = 1.0f - fx, _fy = 1.0f - fy, _fz = 1.0f - fz;
 
-		switch (m_volumeType) {
-			case EFloat32: {
-				const float3 *spectrumData = (float3 *) m_data;
-				const float3
-					&d000 = spectrumData[(z1*m_res.y + y1)*m_res.x + x1],
-					&d001 = spectrumData[(z1*m_res.y + y1)*m_res.x + x2],
-					&d010 = spectrumData[(z1*m_res.y + y2)*m_res.x + x1],
-					&d011 = spectrumData[(z1*m_res.y + y2)*m_res.x + x2],
-					&d100 = spectrumData[(z2*m_res.y + y1)*m_res.x + x1],
-					&d101 = spectrumData[(z2*m_res.y + y1)*m_res.x + x2],
-					&d110 = spectrumData[(z2*m_res.y + y2)*m_res.x + x1],
-					&d111 = spectrumData[(z2*m_res.y + y2)*m_res.x + x2];
+        const float3 *spectrumData = (float3 *) m_data;
+        const float3
+            &d000 = spectrumData[(z1*m_res.y + y1)*m_res.x + x1],
+            &d001 = spectrumData[(z1*m_res.y + y1)*m_res.x + x2],
+            &d010 = spectrumData[(z1*m_res.y + y2)*m_res.x + x1],
+            &d011 = spectrumData[(z1*m_res.y + y2)*m_res.x + x2],
+            &d100 = spectrumData[(z2*m_res.y + y1)*m_res.x + x1],
+            &d101 = spectrumData[(z2*m_res.y + y1)*m_res.x + x2],
+            &d110 = spectrumData[(z2*m_res.y + y2)*m_res.x + x1],
+            &d111 = spectrumData[(z2*m_res.y + y2)*m_res.x + x2];
 
-				return (((d000*_fx + d001*fx)*_fy +
-						 (d010*_fx + d011*fx)*fy)*_fz +
-						((d100*_fx + d101*fx)*_fy +
-						 (d110*_fx + d111*fx)*fy)*fz).toSpectrum();
-				}
-			case EUInt8: {
-				const float3
-					d000 = float3(
-						m_densityMap[m_data[3*((z1*m_res.y + y1)*m_res.x + x1)+0]],
-						m_densityMap[m_data[3*((z1*m_res.y + y1)*m_res.x + x1)+1]],
-						m_densityMap[m_data[3*((z1*m_res.y + y1)*m_res.x + x1)+2]]),
-					d001 = float3(
-						m_densityMap[m_data[3*((z1*m_res.y + y1)*m_res.x + x2)+0]],
-						m_densityMap[m_data[3*((z1*m_res.y + y1)*m_res.x + x2)+1]],
-						m_densityMap[m_data[3*((z1*m_res.y + y1)*m_res.x + x2)+2]]),
-					d010 = float3(
-						m_densityMap[m_data[3*((z1*m_res.y + y2)*m_res.x + x1)+0]],
-						m_densityMap[m_data[3*((z1*m_res.y + y2)*m_res.x + x1)+1]],
-						m_densityMap[m_data[3*((z1*m_res.y + y2)*m_res.x + x1)+2]]),
-					d011 = float3(
-						m_densityMap[m_data[3*((z1*m_res.y + y2)*m_res.x + x2)+0]],
-						m_densityMap[m_data[3*((z1*m_res.y + y2)*m_res.x + x2)+1]],
-						m_densityMap[m_data[3*((z1*m_res.y + y2)*m_res.x + x2)+2]]),
-					d100 = float3(
-						m_densityMap[m_data[3*((z2*m_res.y + y1)*m_res.x + x1)+0]],
-						m_densityMap[m_data[3*((z2*m_res.y + y1)*m_res.x + x1)+1]],
-						m_densityMap[m_data[3*((z2*m_res.y + y1)*m_res.x + x1)+2]]),
-					d101 = float3(
-						m_densityMap[m_data[3*((z2*m_res.y + y1)*m_res.x + x2)+0]],
-						m_densityMap[m_data[3*((z2*m_res.y + y1)*m_res.x + x2)+1]],
-						m_densityMap[m_data[3*((z2*m_res.y + y1)*m_res.x + x2)+2]]),
-					d110 = float3(
-						m_densityMap[m_data[3*((z2*m_res.y + y2)*m_res.x + x1)+0]],
-						m_densityMap[m_data[3*((z2*m_res.y + y2)*m_res.x + x1)+1]],
-						m_densityMap[m_data[3*((z2*m_res.y + y2)*m_res.x + x1)+2]]),
-					d111 = float3(
-						m_densityMap[m_data[3*((z2*m_res.y + y2)*m_res.x + x2)+0]],
-						m_densityMap[m_data[3*((z2*m_res.y + y2)*m_res.x + x2)+1]],
-						m_densityMap[m_data[3*((z2*m_res.y + y2)*m_res.x + x2)+2]]);
-
-				return (((d000*_fx + d001*fx)*_fy +
-						 (d010*_fx + d011*fx)*fy)*_fz +
-						((d100*_fx + d101*fx)*_fy +
-						 (d110*_fx + d111*fx)*fy)*fz).toSpectrum();
-
-				}
-			default: return Spectrum(0.0f);
-		}
+        return (((d000*_fx + d001*fx)*_fy +
+                 (d010*_fx + d011*fx)*fy)*_fz +
+                ((d100*_fx + d101*fx)*_fy +
+                 (d110*_fx + d111*fx)*fy)*fz).toSpectrum();
 		*/
 	}
 
@@ -593,10 +556,7 @@ protected:
     */
 
 protected:
-    Foo_Allocator alloc;
-    Data_array_type d1;
-    Flags_array_type flags;
-    Flags_set_type flag_set;
+    SPGrid *m_grid;
 	bool m_sendData;
 	Vector3i m_res;
 	Transform m_worldToGrid;

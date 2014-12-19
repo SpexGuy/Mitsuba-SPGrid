@@ -68,10 +68,19 @@ public:
     SPGrid_Allocator(SPGrid_Allocator &&that)
         :SPGrid_Geometry<dim>(std::move(that)),
          data_ptr(std::move(that.data_ptr))
-    {}
+    {
+        that.data_ptr = NULL;
+    }
 
     ~SPGrid_Allocator()
-    {Raw_Deallocate(data_ptr,Padded_Volume()*Next_Power_Of_Two(sizeof(T)));}
+    {
+        if (data_ptr) {
+            printf("Deallocating Live SPGrid_Allocator\n");
+            Raw_Deallocate(data_ptr,Padded_Volume()*Next_Power_Of_Two(sizeof(T)));
+        } else {
+            printf("Deallocating null SPGrid_Allocator\n");
+        }
+    }
 
     template<class T1,class T_FIELD> typename EnableIfSame<typename Array<T_FIELD>::type,T1,T>::type
     Get_Array(T_FIELD T1::* field)
