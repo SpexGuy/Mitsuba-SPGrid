@@ -31,6 +31,12 @@ public:
         :data_ptr(data_ptr_input),geometry(geometry_input)
     {}
 
+    SPGrid_Array(SPGrid_Array &&that)
+        :data_ptr(std::move(that.data_ptr)),geometry(std::move(that.geometry))
+    {
+        Static_Assert(dim==3);
+    }
+
     inline T& operator()(const std_array<unsigned int,3>& coord)
     {
         Static_Assert(dim==3);
@@ -58,6 +64,15 @@ public:
         return *reinterpret_cast<T*>(reinterpret_cast<unsigned long>(data_ptr)+T_MASK::Linear_Offset(coord));
     }
     
+    inline const T& operator()(const std_array<int,3>& coord) const
+    {
+        Static_Assert(dim==3);
+#ifdef SPGRID_CHECK_BOUNDS
+        geometry.Check_Bounds(coord.data[0],coord.data[1],coord.data[2]);
+#endif        
+        return *reinterpret_cast<T*>(reinterpret_cast<unsigned long>(data_ptr)+T_MASK::Linear_Offset(coord));
+    }
+    
     inline T& operator()(const std_array<int,2>& coord)
     {
         Static_Assert(dim==2);
@@ -76,6 +91,15 @@ public:
         return *reinterpret_cast<T*>(reinterpret_cast<unsigned long>(data_ptr)+T_MASK::Linear_Offset(i,j,k));
     }
     
+    inline const T& operator()(const unsigned int i,const unsigned int j,const unsigned int k) const
+    {
+        Static_Assert(dim==3);
+#ifdef SPGRID_CHECK_BOUNDS
+        geometry.Check_Bounds(i,j,k);
+#endif        
+        return *reinterpret_cast<T*>(reinterpret_cast<unsigned long>(data_ptr)+T_MASK::Linear_Offset(i,j,k));
+    }
+
     inline T& operator()(const unsigned long offset)
     {
         return *reinterpret_cast<T*>(reinterpret_cast<unsigned long>(data_ptr)+offset);
@@ -147,6 +171,6 @@ public:
 
 //#####################################################################
 };
-}
 
+}
 #endif

@@ -20,12 +20,13 @@ class SPGrid_Allocator: public SPGrid_Geometry<dim>, public SPGrid_Mask_base<Nex
     typedef SPGrid_Geometry<dim> T_Geometry_base;
     typedef SPGrid_Mask_base<NextLogTwo<sizeof(T)>::value,dim> T_Mask_base;
     using T_Mask_base::block_bits;using T_Mask_base::block_xbits;using T_Mask_base::block_ybits;
-    using T_Geometry_base::Padded_Volume;
 
 private:
     void* data_ptr;
 
 public:
+    using T_Geometry_base::Padded_Volume;
+    
     template<class T_FIELD=T> struct Array
     {
       typedef SPGrid_Mask<NextLogTwo<sizeof(T)>::value,NextLogTwo<sizeof(T_FIELD)>::value,dim> mask;
@@ -63,6 +64,11 @@ public:
         Check_Compliance();
         data_ptr=Raw_Allocate(Padded_Volume()*Next_Power_Of_Two(sizeof(T)));
     }
+
+    SPGrid_Allocator(SPGrid_Allocator &&that)
+        :SPGrid_Geometry<dim>(std::move(that)),
+         data_ptr(std::move(that.data_ptr))
+    {}
 
     ~SPGrid_Allocator()
     {Raw_Deallocate(data_ptr,Padded_Volume()*Next_Power_Of_Two(sizeof(T)));}

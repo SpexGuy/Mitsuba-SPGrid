@@ -20,33 +20,16 @@
 #include <mitsuba/core/mstream.h>
 #include <mitsuba/core/fresolver.h>
 #include <mitsuba/core/properties.h>
-#include <mitsuba/core/mmap.h>
 
-//TODO: add includes for SPGrid stuff?
 #include <mitsuba/spgrid/SPGrid_Allocator.h>
 #include <mitsuba/spgrid/SPGrid_Set.h>
-#include <mitsuba/spgrid/ADAPTIVE_SPHERE_RASTERIZER.h>
-#include <mitsuba/spgrid/FACE_INITIALIZER.h>
-#include <mitsuba/spgrid/GEOMETRY_BLOCK.h>
-#include <mitsuba/spgrid/HIERARCHICAL_RASTERIZER.h>
-#include <mitsuba/spgrid/PTHREAD_QUEUE.h>
-// std_array is just so they didn't have to depend on C++11 I think? (basically the std_array stuff could be replaced with std::array whatever???)
-#include <mitsuba/spgrid/std_array.h>
+#include <mitsuba/spgrid/Load_Helper.h>
 
 // Uncomment to enable nearest-neighbor direction interpolation
 //#define VINTERP_NEAREST_NEIGHBOR
 
 // Number of power iteration steps used to find the dominant direction
 #define POWER_ITERATION_STEPS 5
-
-
-// Uncomment to generate an SPGrid data source instead of loading from a file!
-// #define GEN_SPGRID
-
-// Pthread stuff for generating the grid
-#ifdef GEN_SPGRID
-extern PTHREAD_QUEUE* pthread_queue;
-#endif
 
 using namespace SPGrid;
 
@@ -121,40 +104,42 @@ MTS_NAMESPACE_BEGIN
 class SPGridDataSource : public VolumeDataSource {
 public:
 
-    //TODO: does this go here???
-    typedef float T;
     typedef struct Foo_struct {
-            T x,y,z;
-                unsigned flags;
+        float x, y, z;
+        unsigned flags;
     } Foo;
     typedef SPGrid_Allocator<Foo,3> Foo_Allocator;
+    typedef Load_Helper<Foo,3> Loader;
     typedef SPGrid_Allocator<Foo,3>::Array<>::mask Foo_Mask;
-    typedef SPGrid_Allocator<Foo,3>::Array<T>::type Data_array_type;
-    typedef SPGrid_Allocator<Foo,3>::Array<const T>::type Const_data_array_type;
+    typedef SPGrid_Allocator<Foo,3>::Array<float>::type Data_array_type;
+    typedef SPGrid_Allocator<Foo,3>::Array<const float>::type Const_data_array_type;
     typedef SPGrid_Allocator<Foo,3>::Array<unsigned>::type Flags_array_type;
     typedef SPGrid_Set<Flags_array_type> Flags_set_type;
     typedef std_array<int,3> Vec3i;
     typedef std_array<float,3> Vec3f;
 
-
-	enum EVolumeType {
-		EFloat32 = 1,
-		EFloat16 = 2,
-		EUInt8 = 3,
-		EQuantizedDirections = 4
-	};
-
-    //TODO: add the gen stuff
 	SPGridDataSource(const Properties &props)
-		: VolumeDataSource(props) {
+		: VolumeDataSource(props),
+          alloc(Loader::Load_Allocator(props.getString("blockfile"))),
+          d1(alloc.Get_Array(&Foo::x)),
+          flags(alloc.Get_Array(&Foo::flags)),
+          flag_set(flags)
+    {
 		m_volumeToWorld = props.getTransform("toWorld", Transform());
-
 		if (props.hasProperty("min") && props.hasProperty("max")) {
 			/* Optionally allow to use an AABB other than
 			   the one specified by the grid file */
 			m_dataAABB.min = props.getPoint("min");
 			m_dataAABB.max = props.getPoint("max");
-		}
+		} else {
+            std_array<unsigned, 3> size = alloc.Size();
+            //TODO: don't hardcode these
+            m_dataAABB.min = Point(-0.5, -0.5, -0.195312);
+            m_dataAABB.max = Point( 0.5,  0.5,  0.195312);
+        }
+        m_res[0] = alloc.xsize;
+        m_res[1] = alloc.ysize;
+        m_res[2] = alloc.zsize;
 
 		/**
 		 * When 'sendData' is set to false, only the filename
@@ -163,18 +148,22 @@ public:
 		 * the file (which had better exist if unserialization
 		 * occurs on a remote machine).
 		 */
-		 m_sendData = props.getBoolean("sendData", false);
-         //TODO: add method to gen stuff from SPGrid rasterizer
-         #ifdef GEN_SPGRID
-         genSPGrid(); 
-         #else
-		 loadFromFile(props.getString("filename"));
-         #endif
+        m_sendData = props.getBoolean("sendData", false);
+
+		Loader::Load_Mask(alloc, flag_set, props.getString("blockfile"));
+        Loader::Load_Data(alloc, &Foo::flags, flag_set, props.getString("flagfile")); //now it's some type issue?
+        Loader::Load_Data(alloc, &Foo::x, flag_set, props.getString("densityfile"));
     }
 
     //TODO: probably won't support this? or at least force local load?
 	SPGridDataSource(Stream *stream, InstanceManager *manager)
-			: VolumeDataSource(stream, manager) {
+			: VolumeDataSource(stream, manager),
+              alloc(Loader::Load_Allocator("GIANT FAILURE!")),
+              d1(alloc.Get_Array(&Foo::x)),
+              flags(alloc.Get_Array(&Foo::flags)),
+              flag_set(flags)
+    {
+        /*
 		m_volumeToWorld = Transform(stream);
 		m_dataAABB = AABB(stream);
 		m_sendData = stream->readBool();
@@ -191,96 +180,30 @@ public:
 			loadFromFile(filename);
 		}
 		configure();
+        */
 	}
 
-    //TODO: also kill SPGrid things if we use them
 	virtual ~SPGridDataSource() {
-		if (!m_mmap)
-			delete[] m_data;
+        printf("\nSummary:\n  min: (%4d, %4d, %4d)\n  max: (%4d, %4d, %4d)\n",
+            minX, minY, minZ,
+            maxX, maxY, maxZ);
+        printf(" Caused By:\n");
+        printf("  (%f, %f, %f)\n", nix.x, nix.y, nix.z);
+        printf("  (%f, %f, %f)\n", niy.x, niy.y, niy.z);
+        printf("  (%f, %f, %f)\n", niz.x, niz.y, niz.z);
+        printf("  (%f, %f, %f)\n", xix.x, xix.y, xix.z);
+        printf("  (%f, %f, %f)\n", xiy.x, xiy.y, xiy.z);
+        printf("  (%f, %f, %f)\n", xiz.x, xiz.y, xiz.z);
 	}
 
-    //TODO: actually figure this out!
-    //      currently this is just the main.c of the SPGrid demo (but it doesn't run either kernel)
-    void genSPGrid() {
-
-		//initialize some more variables
-		active_cells = 0;
-		size = 512;
-
-    	imin(0);
-   		imax(size);
-    	Xmin(0.f);
-    	Xmax(1.f);
-    	center(.5f,.5f,.5f);
-    	inner_radius=.3f;
-    	outer_radius=.31f;
-
-
-		// just doing 4 threads hardcoded for now
-		pthread_queue = new PTHREAD_QUEUE(4);
-
-		//set up the objects
-        allocator(size,size,size);
-        d1 = allocator.Get_Array(&Foo::x);
-        d2 = allocator.Get_Const_Array(&Foo::y);
-        d3 = allocator.Get_Const_Array(&Foo::z);
-        flags = allocator.Get_Array(&Foo::flags);
-        flag_set(flags);
-
-		//flag a bunch of blocks/cells
-    	std::cout << "Flagging active cells (on narrow band)...";
-    	GEOMETRY_BLOCK block(imin,imax,Xmin,Xmax);
-    	ADAPTIVE_SPHERE_RASTERIZER<Flags_set_type> adaptive_sphere(flag_set,center,inner_radius,outer_radius); //need to update this to write to x as well? or should the x-writer be a Data_Helper (temp thing?)
-    	HIERARCHICAL_RASTERIZER<ADAPTIVE_SPHERE_RASTERIZER<Flags_set_type> > rasterizer(adaptive_sphere);
-    	rasterizer.Iterate(block);
-    	active_cells = adaptive_sphere.total_active;
-    	// Narrow band init
-    	std::cout << "done.\n";
-    	uint64_t bigsize = size;
-    	std::cout << "Activated " << active_cells << " cells, out of a possible "
-              << bigsize*bigsize*bigsize << "\n\n";
-    
-    	flag_set.Refresh_Block_Offsets();
-    	// Face flag initialization
-    	FACE_INITIALIZER<Foo, 3>::Flag_Active_Faces(flag_set);
-    	printf("Finished flagging active cell faces.\n");
-
-        //TODO: Run a modified Blocked Copy Helper to write 0.5f because yeah.	
-        Blocked_Copy_Helper<T, Data_array_type::MASK::elements_per_block> helper(
-        	(T*)d1.Get_Data_Ptr(),
-        	(T*)d2.Get_Data_Ptr(),
-        	0.5f, //this is the value of c i'm using (temp)
-        	(T*)d3.Get_Data_Ptr(),
-        	(unsigned*)flags.Get_Data_Ptr(),
-        	flag_set.Get_Blocks().first,
-        	flag_set.Get_Blocks().second);
-    	helper.Run_Parallel(n_threads);
-        //TODO: also need to add the stuff for setting up the other properties done by loadFromFile!!!	
-
-		m_res = Vector(size, size, size); //I think this is right?
-		m_channels = 1; //only doing the one density channel for now
-		m_volumetype = (EVolumeType) "float32"; //just 32bit floats for now
-		//how do I AABB? not touching it for now
-		return;
-    }
-    //TODO: replace with SPGrid whatever
 	size_t getVolumeSize() const {
-		size_t nEntries = (size_t) m_res.x
-			* (size_t) m_res.y * (size_t) m_res.z;
-		switch (m_volumeType) {
-			case EFloat32: return 4 * nEntries * m_channels;
-			case EFloat16: return 2 * nEntries * m_channels;
-			case EUInt8:   return 1 * nEntries * m_channels;
-			case EQuantizedDirections:  return 2 * nEntries;
-			default:
-				Log(EError, "Unknown volume format!");
-				return 0;
-		}
+        return size_t(alloc.Padded_Volume());
 	}
+    
     //TODO: we probably won't support this??? idk
 	void serialize(Stream *stream, InstanceManager *manager) const {
 		VolumeDataSource::serialize(stream, manager);
-
+        /*
 		m_volumeToWorld.serialize(stream);
 		m_dataAABB.serialize(stream);
 		stream->writeBool(m_sendData);
@@ -294,7 +217,13 @@ public:
 		} else {
 			stream->writeString(m_filename.string());
 		}
+        */
 	}
+
+    void loadFromFile(const fs::path &filepath) {
+        printf("Cannot load from file\n");
+        //TODO
+    }
 
     //TODO: fix me for SPGrid
 	void configure() {
@@ -312,8 +241,9 @@ public:
 		for (int i=0; i<8; ++i)
 			m_aabb.expandBy(m_volumeToWorld(m_dataAABB.getCorner(i)));
 
-		/* Precompute cosine and sine lookup tables */
-		for (int i=0; i<255; i++) {
+        /* Precompute cosine and sine lookup tables */
+		/*
+        for (int i=0; i<255; i++) {
 			Float angle = (float) i * ((float) M_PI / 255.0f);
 			m_cosPhi[i] = std::cos(2.0f * angle);
 			m_sinPhi[i] = std::sin(2.0f * angle);
@@ -324,79 +254,10 @@ public:
 		m_cosPhi[255] = m_sinPhi[255] = 0;
 		m_cosTheta[255] = m_sinTheta[255] = 0;
 		m_densityMap[255] = 1.0f;
-	}
+        */
 
-    //TODO: replace me with Load_Helper!
-	void loadFromFile(const fs::path &filename) {
-		m_filename = filename;
-		fs::path resolved = Thread::getThread()->getFileResolver()->resolve(filename);
-		m_mmap = new MemoryMappedFile(resolved);
-		ref<MemoryStream> stream = new MemoryStream(m_mmap->getData(), m_mmap->getSize());
-		stream->setByteOrder(Stream::ELittleEndian);
-
-		char header[3];
-		stream->read(header, 3);
-		if (header[0] != 'V' || header[1] != 'O' || header[2] != 'L')
-			Log(EError, "Encountered an invalid volume data file "
-				"(incorrect header identifier)");
-		uint8_t version;
-		stream->read(&version, 1);
-		if (version != 3)
-			Log(EError, "Encountered an invalid volume data file "
-				"(incorrect file version)");
-		int type = stream->readInt();
-
-		int xres = stream->readInt(),
-			yres = stream->readInt(),
-			zres = stream->readInt();
-		m_res = Vector3i(xres, yres, zres);
-		m_channels = stream->readInt();
-		std::string format;
-
-		switch (type) {
-			case EFloat32:
-				if (m_channels != 1 && m_channels != 3)
-					Log(EError, "Encountered an unsupported float32 volume data "
-						"file (%i channels, only 1 and 3 are supported)",
-						m_channels);
-				format = "float32";
-				break;
-			case EFloat16:
-				format = "float16";
-				Log(EError, "Error: float16 volumes are not yet supported!");
-			case EUInt8:
-				format = "uint8";
-				if (m_channels != 1 && m_channels != 3)
-					Log(EError, "Encountered an unsupported uint8 volume data "
-						"file (%i channels, only 1 and 3 are supported)", m_channels);
-				break;
-			case EQuantizedDirections:
-				format = "qdir";
-				if (m_channels != 3)
-					Log(EError, "Encountered an unsupported quantized direction "
-							"volume data file (%i channels, only 3 are supported)",
-							m_channels);
-				break;
-			default:
-				Log(EError, "Encountered a volume data file of unknown type (type=%i, channels=%i)!", type, m_channels);
-		}
-
-		m_volumeType = (EVolumeType) type;
-
-		if (!m_dataAABB.isValid()) {
-			Float xmin = stream->readSingle(),
-				  ymin = stream->readSingle(),
-				  zmin = stream->readSingle();
-			Float xmax = stream->readSingle(),
-				  ymax = stream->readSingle(),
-				  zmax = stream->readSingle();
-			m_dataAABB = AABB(Point(xmin, ymin, zmin), Point(xmax, ymax, zmax));
-		}
-
-		Log(EDebug, "Mapped \"%s\" into memory: %ix%ix%i (%i channels, format = %s), %s, %s",
-			resolved.filename().string().c_str(), m_res.x, m_res.y, m_res.z, m_channels, format.c_str(),
-			memString(m_mmap->getSize()).c_str(), m_dataAABB.toString().c_str());
-		m_data = (uint8_t *) (((float *) m_mmap->getData()) + 12);
+        minX = minY = minZ = 0x7FFFFFFF;
+        maxX = maxY = maxZ = 0x80000000;
 	}
 
 	/**
@@ -451,7 +312,9 @@ public:
     //      it looks like d000-d111 are the grid at the point and the 8 surrounding grids?
     //      need to determine dxxx map to which directions
     //      or just grab the closest thing and call it good? idk
-	Float lookupFloat(const Point &_p) const {
+	int minX, minY, minZ, maxX, maxY, maxZ;
+    Point nix, niy, niz, xix, xiy, xiz;
+    Float lookupFloat(const Point &_p) const {
 		const Point p = m_worldToGrid.transformAffine(_p);
 
 		//This is just the basic implementation - grab nearest neighbor?
@@ -459,7 +322,11 @@ public:
 		x = math::floorToInt(p.x);
 		y = math::floorToInt(p.y);
 		z = math::floorToInt(p.z);
-		return d1(x, y, z);
+        std_array<int,3> coord(x, y, z);
+        if (flag_set.Is_Set(coord, 0xFFFFFFFFU)) {
+		    return d1(coord);
+        }
+        return 0.0f;
 
 		//The following stuff does some nice interpolation but we can look at that later
 		/*
@@ -540,12 +407,7 @@ public:
 					&d001 = spectrumData[(z1*m_res.y + y1)*m_res.x + x2],
 					&d010 = spectrumData[(z1*m_res.y + y2)*m_res.x + x1],
 					&d011 = spectrumData[(z1*m_res.y + y2)*m_res.x + x2],
-					&d100 = spectrumData[(z2*m_
-   		int size = atoi(argv[1]);
-
-	    if (size < 256) {
-	        std::cout << "This is a sparse configuration, crank that size up!\n";
-   		}res.y + y1)*m_res.x + x1],
+					&d100 = spectrumData[(z2*m_res.y + y1)*m_res.x + x1],
 					&d101 = spectrumData[(z2*m_res.y + y1)*m_res.x + x2],
 					&d110 = spectrumData[(z2*m_res.y + y2)*m_res.x + x1],
 					&d111 = spectrumData[(z2*m_res.y + y2)*m_res.x + x2];
@@ -636,11 +498,6 @@ public:
 						((fy < .5) ? y1 : y2)) * m_res.x +
 						((fx < .5) ? x1 : x2));
 					}
-   		int size = atoi(argv[1]);
-
-	    if (size < 256) {
-	        std::cout << "This is a sparse configuration, crank that size up!\n";
-   		}
 					break;
 				default:
 					return Vector(0.0f);
@@ -701,14 +558,14 @@ public:
 			Float specularity = 1-lambda[1]/lambda[0];
 
 #else
-			/* Square the structure tensor for faster convergence */
+			* Square the structure tensor for faster convergence */
 			/*
 			tensor *= tensor;
 
 			const Float invSqrt3 = 0.577350269189626f;
 			value = Vector(invSqrt3, invSqrt3, invSqrt3);
 
-			/* Determine the dominant eigenvector using
+			* Determine the dominant eigenvector using
 			   a few power iterations */
 			/*
 			for (int i=0; i<POWER_ITERATION_STEPS-1; ++i)
@@ -744,7 +601,6 @@ public:
 		std::ostringstream oss;
 		oss << "SPGridVolume[" << endl
 			<< "  res = " << m_res.toString() << "," << endl
-			<< "  channels = " << m_channels << "," << endl
 			<< "  aabb = " << m_dataAABB.toString() << endl
 			<< "]";
 		return oss.str();
@@ -752,6 +608,7 @@ public:
 
 	MTS_DECLARE_CLASS()
 protected:
+    /*
 	FINLINE Vector lookupQuantizedDirection(size_t index) const {
 		uint8_t theta = m_data[2*index], phi = m_data[2*index+1];
 		return Vector(
@@ -760,45 +617,23 @@ protected:
 			m_cosTheta[theta]
 		);
 	}
+    */
 
 protected:
-	fs::path m_filename;
-	uint8_t *m_data;
+    Foo_Allocator alloc;
+    Data_array_type d1;
+    Flags_array_type flags;
+    Flags_set_type flag_set;
 	bool m_sendData;
-	EVolumeType m_volumeType;
 	Vector3i m_res;
-	int m_channels;
 	Transform m_worldToGrid;
 	Transform m_worldToVolume;
 	Transform m_volumeToWorld;
 	Float m_stepSize;
 	AABB m_dataAABB;
-	ref<MemoryMappedFile> m_mmap;
-	Float m_cosTheta[256], m_sinTheta[256];
-	Float m_cosPhi[256], m_sinPhi[256];
-	Float m_densityMap[256];
-
-    //TODO: this is probably where we want the SPGrid stuff
-    //      so here it is!
-    int active_cells;
-    int size; //small for now just for testing purposes!
-    Foo_Allocator allocator;
-    Data_array_type d1;
-    Const_data_array_type d2;
-    Const_data_array_type d3;
-    Flags_array_type flags;
-    Flags_set_type flag_set;
-    
-    Vec3i imin;
-   	Vec3i imax;
-    Vec3f Xmin;
-    Vec3f Xmax;
-    Vec3f center;
-    float inner_radius;
-    float outer_radius;
-
-
-
+	//Float m_cosTheta[256], m_sinTheta[256];
+	//Float m_cosPhi[256], m_sinPhi[256];
+	//Float m_densityMap[256];
 };
 
 MTS_IMPLEMENT_CLASS_S(SPGridDataSource, false, VolumeDataSource);

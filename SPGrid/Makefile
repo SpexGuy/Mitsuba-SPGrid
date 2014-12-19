@@ -1,5 +1,5 @@
 CXX=g++
-CXXFLAGS=-pthread
+CXXFLAGS=-pthread -std=c++0x
 NAME=spgrid_demo
 all: Blocked_Copy_Helper.o Laplace_Helper.o PTHREAD_QUEUE.o SPGrid_Utilities.o main.o
 	$(CXX) $(CXXFLAGS) -o $(NAME) \

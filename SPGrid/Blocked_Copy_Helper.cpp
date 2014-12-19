@@ -59,7 +59,7 @@ Run_Index_Range(const int index_start,const int index_end)
 
       for(int i=0;i<num_elements;i++)
           if(flags_in[i] & SPGrid_Cell_Type_Interior)
-              output[i] = (c * y1_in[i]) + y2_in[i];
+              output[i] = (c);
     }
 }
 //#####################################################################

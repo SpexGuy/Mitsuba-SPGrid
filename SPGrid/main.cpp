@@ -25,8 +25,9 @@
 
 //#define LOOP_AT_END
 #define BLOCKED_COPY
-//#define DENSE_CUBE
-#define LOAD_FLAGS
+#define DENSE_CUBE
+//#define LOAD_FLAGS
+#define LOAD_SMOKE
 #define SAVE_GRID
 
 extern PTHREAD_QUEUE* pthread_queue;
@@ -43,6 +44,8 @@ typedef SPGrid_Allocator<Foo,3>::Array<T>::type Data_array_type;
 typedef SPGrid_Allocator<Foo,3>::Array<const T>::type Const_data_array_type;
 typedef SPGrid_Allocator<Foo,3>::Array<unsigned>::type Flags_array_type;
 typedef SPGrid_Set<Flags_array_type> Flags_set_type;
+typedef Save_Helper<Foo,3> Saver;
+typedef Load_Helper<Foo,3> Loader;
 typedef std_array<int,3> Vec3i;
 typedef std_array<float,3> Vec3f;
 
@@ -60,13 +63,15 @@ int main(int argc,char* argv[]) {
     int n_threads = atoi(argv[2]);
     pthread_queue = new PTHREAD_QUEUE(n_threads);
 
+#ifndef LOAD_SMOKE
+#ifndef LOAD_FLAGS
     Foo_Allocator allocator(size,size,size);
     Data_array_type d1 = allocator.Get_Array(&Foo::x);
     Const_data_array_type d2 = allocator.Get_Const_Array(&Foo::y);
     Const_data_array_type d3 = allocator.Get_Const_Array(&Foo::z);
     Flags_array_type flags = allocator.Get_Array(&Foo::flags);
     Flags_set_type flag_set(flags);
-    
+
     Vec3i imin(0);
     Vec3i imax(size);
     Vec3f Xmin(0.f);
@@ -91,36 +96,23 @@ int main(int argc,char* argv[]) {
         std::cout << "This is a sparse configuration, crank that size up!\n";
     }
     std::cout << "Flagging active cells (on narrow band)...";
-#ifdef LOAD_FLAGS
-    Load_Helper<Foo, 3> loader(allocator);
-    if (!loader.Load_Mask(flag_set, "blocks.spmask")) {
-        printf("Failed to load blocks.spmask");
-        exit(1);
-    }
-    if (!loader.Load_Data(&Foo::flags, flag_set, "flags.spdata")) {
-        printf("Failed to load flags.spdata");
-        exit(1);
-    }
-    printf("Loaded flags from flags.spdata\n");
-#else
     GEOMETRY_BLOCK block(imin,imax,Xmin,Xmax);
     ADAPTIVE_SPHERE_RASTERIZER<Flags_set_type> adaptive_sphere(flag_set,center,inner_radius,outer_radius);
     HIERARCHICAL_RASTERIZER<ADAPTIVE_SPHERE_RASTERIZER<Flags_set_type> > rasterizer(adaptive_sphere);
     rasterizer.Iterate(block);
     active_cells = adaptive_sphere.total_active;
-#endif
-#endif
+#endif //DENSE_CUBE
     std::cout << "done.\n";
     uint64_t bigsize = size;
     std::cout << "Activated " << active_cells << " cells, out of a possible "
               << bigsize*bigsize*bigsize << "\n\n";
-    
+
     flag_set.Refresh_Block_Offsets();
     // Face flag initialization
     FACE_INITIALIZER<Foo, 3>::Flag_Active_Faces(flag_set);
     printf("Finished flagging active cell faces.\n");
 
-    T c = 0.1f;
+    T c = 0.5f;
 
 #ifdef BLOCKED_COPY
     // Perform parallel x = y + (c * z)
@@ -134,7 +126,7 @@ int main(int argc,char* argv[]) {
         flag_set.Get_Blocks().second);
     helper.Run_Parallel(n_threads);
     printf("Finished running SAXPY kernel.\n");
-#else
+#else // BLOCKED_COPY
     Laplace_Helper<T,NextLogTwo<sizeof(Foo)>::value,3> helper(
         (T*)d1.Get_Data_Ptr(),
         (T*)d3.Get_Data_Ptr(),
@@ -145,15 +137,70 @@ int main(int argc,char* argv[]) {
         2./3.);
     helper.Run_Parallel(n_threads);
     printf("Finished running Laplace kernel.\n");
+#endif // BLOCKED_COPY
+
+#else // LOAD_FLAGS
+    Foo_Allocator temp = Loader::Load_Allocator("blocks.spmask");
+    Foo_Allocator allocator(std::move(temp));
+    Data_array_type d1 = allocator.Get_Array(&Foo::x);
+    Const_data_array_type d2 = allocator.Get_Const_Array(&Foo::y);
+    Const_data_array_type d3 = allocator.Get_Const_Array(&Foo::z);
+    Flags_array_type flags = allocator.Get_Array(&Foo::flags);
+    Flags_set_type flag_set(flags);
+
+    Loader::Load_Mask(allocator, flag_set, "blocks.spmask");
+    printf("Loaded mask from blocks.spmask\n");
+    Loader::Load_Data(allocator, &Foo::flags, flag_set, "flags.spdata");
+    printf("Loaded flags from flags.spdata\n");
+    Loader::Load_Data(allocator, &Foo::x, flag_set, "density.spdata");
+    printf("Loaded data from density.spdata\n");
+#endif // LOAD_FLAGS
+
+#else // LOAD_SMOKE
+    ifstream input("smoke.vol", ios::binary | ios::in);
+    input.seekg(0x18);
+    const int xres = 128;
+    const int yres = 128;
+    const int zres = 50;
+    
+    float AABB[6];
+    Static_Assert(sizeof(float) == 4);
+    input.read(reinterpret_cast<char*>(AABB), 6*sizeof(float)); // read the AABB
+    printf("AABB: (%f, %f, %f), (%f, %f, %f)\n", AABB[0], AABB[1], AABB[2], AABB[3], AABB[4], AABB[5]);
+    
+    Foo_Allocator allocator(128, 128, 64);
+    Data_array_type d1 = allocator.Get_Array(&Foo::x);
+    Const_data_array_type d2 = allocator.Get_Const_Array(&Foo::y);
+    Const_data_array_type d3 = allocator.Get_Const_Array(&Foo::z);
+    Flags_array_type flags = allocator.Get_Array(&Foo::flags);
+    Flags_set_type flag_set(flags);
+    int count = 0;
+    int active = 0;
+    float value;
+    std_array<unsigned, 3> coord;
+    for (coord(2) = 0; coord(2) < zres; coord(2)++) {
+        for (coord(1) = 0; coord(1) < yres; coord(1)++) {
+            for (coord(0) = 0; coord(0) < xres; coord(0)++) {
+                if (!input.read(reinterpret_cast<char*>(&value), sizeof(float))) {
+                    printf("FAIL AT (%d, %d, %d)!!\n", coord(0), coord(1), coord(2));
+                    exit(-1);
+                }
+                if (value) {
+                    flag_set.Mask(coord, 1U);
+                    d1(coord) = value;
+                    ++active;
+                }
+                ++count;
+            }
+        }
+    }
+    printf("Activated %d of %d cells\n", active, count);
 #endif
 
 #ifdef SAVE_GRID
-    Save_Helper<Foo_Allocator, 3, Flags_set_type> saver(
-        allocator,
-        flag_set);
-    saver.Save_Mask("blocks.spmask");
-    saver.Save_Data(d3, "density.spdata");
-    saver.Save_Data(flags, "flags.spdata");
+    Saver::Save_Mask(allocator, flag_set, "blocks.spmask");
+    Saver::Save_Data(allocator, &Foo::x, flag_set, "density.spdata");
+    Saver::Save_Data(allocator, &Foo::flags, flag_set, "flags.spdata");
     printf("Finished saving.\n");
 #endif
        

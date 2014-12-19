@@ -45,6 +45,15 @@ public:
         max_linear_offset = array.geometry.Padded_Volume()*T_ARRAY::MASK::Bytes_Per_Element(); // TODO: Check this is correct
         dirty = false; // They start as consistent -- both empty
     }
+
+    SPGrid_Set(SPGrid_Set &&other)
+        : array(std::move(other.array)),
+          page_mask_array(std::move(other.page_mask_array)),
+          array_length(std::move(other.array_length)),
+          max_linear_offset(std::move(other.max_linear_offset)),
+          block_offsets(std::move(other.block_offsets)),
+          dirty(std::move(other.dirty))
+    {}
     
     inline bool CheckBounds(unsigned long linear_offset)
     {
@@ -89,7 +98,7 @@ public:
         } 
     }
 
-    bool MaskMatch(unsigned long linear_offset, const T mask)
+    bool MaskMatch(unsigned long linear_offset, const T mask) const
     {
         if( linear_offset < max_linear_offset)
         {
@@ -99,7 +108,7 @@ public:
         return false; // TODO: Do we need a FATAL ERROR?
     }
 
-    bool Is_Set(unsigned long linear_offset,const T mask)
+    bool Is_Set(unsigned long linear_offset,const T mask) const
     {
         if(linear_offset < max_linear_offset)
         {
@@ -112,7 +121,7 @@ public:
         return false;        
     }
     
-    bool Is_Set(std_array<int,dim> coord,const T mask)
+    bool Is_Set(std_array<int,dim> coord,const T mask) const
     {
         unsigned long linear_offset = T_MASK::Linear_Offset(coord);
         if(linear_offset < max_linear_offset)
@@ -131,7 +140,7 @@ public:
         if(block_offsets.size())
             return std::pair<const unsigned long*,unsigned>(&block_offsets[0],block_offsets.size());
         else
-            return std::pair<const unsigned long*,unsigned>(0,0);
+            return std::pair<const unsigned long*,unsigned>(reinterpret_cast<const unsigned long *>(NULL),0);
     }
 
     void Refresh_Block_Offsets()
