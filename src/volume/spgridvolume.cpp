@@ -30,7 +30,7 @@
 
 // Uncomment to enable nearest-neighbor direction interpolation
 //#define VINTERP_NEAREST_NEIGHBOR
-//#define VINTERP_LOOKUP_FLOAT
+#define VINTERP_LOOKUP_FLOAT
 //#define VINTERP_LOOKUP_SPECTRUM
 
 // Number of power iteration steps used to find the dominant direction
@@ -409,6 +409,8 @@ public:
 		
         if (x1 < 0 || y1 < 0 || z1 < 0)
             return 0;
+        if (x1 >= m_res.x || y1 >= m_res.y || z1 >= m_res.z)
+			return 0;
 #ifdef VINTERP_LOOKUP_FLOAT
         float d[8];
         
@@ -416,9 +418,6 @@ public:
         const int x2 = x1 + resolution,
                   y2 = y1 + resolution,
                   z2 = z1 + resolution;
-
-        if (x2 >= m_res.x || y2 >= m_res.y || z2 >= m_res.z)
-			return 0;
 
         getGridValue(x2, y1, z1, d[1]);
         getGridValue(x1, y2, z1, d[2]);
@@ -437,7 +436,7 @@ public:
                 (d[6]*_fx + d[7]*fx)*fy)*fz;
 #else
         float value;
-        getInitialGridValue(x1, y1, z1, value);
+        getGridValue(x1, y1, z1, value);
         return value;
 #endif
 	}
@@ -658,9 +657,9 @@ protected:
             std_array<int,3> coord((x>>c), (y>>c), (z>>c));
             if (m_grids[c]->flag_set.Is_Set(coord, 0xFFFFFFFFU)) {
                 val = m_grids[c]->d0(coord);
-                x >>= c;
-                y >>= c;
-                z >>= c;
+                x &= 0xFFFFFFFF << c; // zero the lowest [c] bits in x, y, and z to align it with the grid
+                y &= 0xFFFFFFFF << c;
+                z &= 0xFFFFFFFF << c;
                 return 1 << c;
             }
         }
