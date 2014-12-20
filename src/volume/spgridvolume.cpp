@@ -211,7 +211,7 @@ public:
 
         if (m_nGrids) {
             m_grids = new SPGrid*[m_nGrids];
-            for (int c = 0; c < m_nGrids; c++) {
+            for (unsigned c = 0; c < m_nGrids; c++) {
                 m_grids[c] = new SPGrid(std::move(Loader::Load_Allocator(blockfiles[c])), c);
                 Loader::Load_Mask(m_grids[c]->alloc, m_grids[c]->flag_set, blockfiles[c]);
                 Loader::Load_Data(m_grids[c]->alloc, &Foo::flags, m_grids[c]->flag_set, flagfiles[c]);
@@ -286,7 +286,7 @@ public:
 	}
 
 	virtual ~SPGridDataSource() {
-        for (int c = 0; c < m_nGrids; c++)
+        for (unsigned c = 0; c < m_nGrids; c++)
             delete m_grids[c];
         delete [] m_grids;
 	}
@@ -428,7 +428,7 @@ public:
         getGridValue(x1, y2, z2, d[6]);
         getGridValue(x2, y2, z2, d[7]);
 
-        const Float fx =  p.x - x1,  fy =  p.y - y1,  fz =  p.z - z1,
+        const Float fx = (p.x - x1)/resolution, fy = (p.y - y1)/resolution, fz = (p.z - z1)/resolution,
                    _fx = 1.0f - fx, _fy = 1.0f - fy, _fz = 1.0f - fz;
 
         return ((d[0]*_fx + d[1]*fx)*_fy +
@@ -437,7 +437,7 @@ public:
                 (d[6]*_fx + d[7]*fx)*fy)*fz;
 #else
         float value;
-        getGridValue(x1, y1, z1, value);
+        getInitialGridValue(x1, y1, z1, value);
         return value;
 #endif
 	}
@@ -651,30 +651,26 @@ protected:
         }
     }
 
+    //shifting the coordinates by c to account for the resolution difference in the lower grids.
     //TODO: optimize based on number of trailing zeros
     FINLINE unsigned getInitialGridValue(int &x, int &y, int &z, float &val) const {
-        const int sx = x, sy = y, sz = z;
-        for (int c = 0; c < m_nGrids; c++) {
-            std_array<int,3> coord(x, y, z);
+        for (unsigned c = 0; c < m_nGrids; c++) {
+            std_array<int,3> coord((x>>c), (y>>c), (z>>c));
             if (m_grids[c]->flag_set.Is_Set(coord, 0xFFFFFFFFU)) {
                 val = m_grids[c]->d0(coord);
+                x >>= c;
+                y >>= c;
+                z >>= c;
                 return 1 << c;
             }
-            x = x >> 1;
-            y = y >> 1;
-            z = z >> 1;
         }
-        // go back to max resolution
-        x = sx;
-        y = sy;
-        z = sz;
         val = 0.0f;
         return 1;
     }
 
     FINLINE void getGridValue(int x, int y, int z, float &val) const {
-        for (int c = 0; c < m_nGrids; c++) {
-            std_array<int,3> coord(x, y, z);
+        for (unsigned c = 0; c < m_nGrids; c++) {
+            std_array<int,3> coord((x>>c), (y>>c), (z>>c));
             if (m_grids[c]->flag_set.Is_Set(coord, 0xFFFFFFFFU)) {
                 val = m_grids[c]->d0(coord);
                 return;

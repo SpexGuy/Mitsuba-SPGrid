@@ -24,11 +24,10 @@
 #include "HIERARCHICAL_RASTERIZER.h"
 
 //#define LOOP_AT_END
-#define BLOCKED_COPY
-#define DENSE_CUBE
-#define LOAD_FLAGS
-//#define LOAD_SMOKE
-//#define SAVE_GRID
+//#define BLOCKED_COPY
+//#define DENSE_CUBE
+#define LOAD_SMOKE
+#define SAVE_GRID
 
 extern PTHREAD_QUEUE* pthread_queue;
 using namespace SPGrid;
@@ -77,8 +76,8 @@ int main(int argc,char* argv[]) {
     Vec3f Xmin(0.f);
     Vec3f Xmax(1.f);
     Vec3f center(.5f,.5f,.5f);
-    float inner_radius=.3f;
-    float outer_radius=.31f;
+    float inner_radius=.1f;
+    float outer_radius=.3f;
 
     int active_cells = 0;
 #ifdef DENSE_CUBE
@@ -168,7 +167,7 @@ int main(int argc,char* argv[]) {
     input.read(reinterpret_cast<char*>(AABB), 6*sizeof(float)); // read the AABB
     printf("AABB: (%f, %f, %f), (%f, %f, %f)\n", AABB[0], AABB[1], AABB[2], AABB[3], AABB[4], AABB[5]);
     
-    Foo_Allocator allocator(128, 128, 64);
+    Foo_Allocator allocator(64, 64, 32);
     Data_array_type d1 = allocator.Get_Array(&Foo::x);
     Const_data_array_type d2 = allocator.Get_Const_Array(&Foo::y);
     Const_data_array_type d3 = allocator.Get_Const_Array(&Foo::z);
@@ -186,9 +185,12 @@ int main(int argc,char* argv[]) {
                     exit(-1);
                 }
                 if (value) {
-                    flag_set.Mask(coord, 1U);
-                    d1(coord) = value;
-                    ++active;
+                    if ((coord(0) <= xres/2)) {
+                        std_array<unsigned, 3> tmpcoord = coord/2;
+                        flag_set.Mask(tmpcoord, 1U);
+                        d1(tmpcoord) = value;
+                        ++active;
+                    }
                 }
                 ++count;
             }
@@ -198,9 +200,9 @@ int main(int argc,char* argv[]) {
 #endif
 
 #ifdef SAVE_GRID
-    Saver::Save_Mask(allocator, flag_set, "blocks.spmask");
-    Saver::Save_Data(allocator, &Foo::x, flag_set, "density.spdata");
-    Saver::Save_Data(allocator, &Foo::flags, flag_set, "flags.spdata");
+    Saver::Save_Mask(allocator, flag_set, "blocks2.spmask");
+    Saver::Save_Data(allocator, &Foo::x, flag_set, "density2.spdata");
+    Saver::Save_Data(allocator, &Foo::flags, flag_set, "flags2.spdata");
     printf("Finished saving.\n");
 #endif
        
